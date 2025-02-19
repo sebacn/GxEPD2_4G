@@ -484,12 +484,12 @@ void GxEPD2_270::refresh(int16_t x, int16_t y, int16_t w, int16_t h)
   if (w1 % 8 > 0) w1 += 8 - w1 % 8;
   x1 -= x1 % 8;
   if (_refresh_mode == full_refresh) _Init_Part();
-  if (_refresh_mode == grey_refresh) _Update_4G();
-  else
-  {
+  //if (_refresh_mode == grey_refresh) _Update_4G();
+  //else
+  //{
     _refreshWindow(x1, y1, w1, h1);
     _waitWhileBusy("refresh", partial_refresh_time);
-  }
+  //}
 }
 
 void GxEPD2_270::powerOff(void)

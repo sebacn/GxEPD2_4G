@@ -348,6 +348,65 @@ class GxEPD2_4G_BW_R : public GxEPD2_4G_GFX_BASE_CLASS
       }
     }
 
+    bool nextPage_4G()
+    {
+      uint16_t page_ys = _current_page * _page_height;
+      if (_using_partial_mode)
+      {
+        //Serial.print("  nextPage("); Serial.print(_pw_x); Serial.print(", "); Serial.print(_pw_y); Serial.print(", ");
+        //Serial.print(_pw_w); Serial.print(", "); Serial.print(_pw_h); Serial.print(") P"); Serial.println(_current_page);
+        uint16_t page_ye = _current_page < int16_t(_pages - 1) ? page_ys + _page_height : HEIGHT;
+        uint16_t dest_ys = _pw_y + page_ys; // transposed
+        uint16_t dest_ye = gx_uint16_min(_pw_y + _pw_h, _pw_y + page_ye);
+
+        if (dest_ye > dest_ys)
+        {
+          //Serial.print("writeImage("); Serial.print(_pw_x); Serial.print(", "); Serial.print(dest_ys); Serial.print(", ");
+          //Serial.print(_pw_w); Serial.print(", "); Serial.print(dest_ye - dest_ys); Serial.println(")");
+          epd2.writeImage_4G(_buffer, 2, _pw_x, dest_ys, _pw_w, dest_ye - dest_ys);
+        }
+        else
+        {
+          //Serial.print("writeImage("); Serial.print(_pw_x); Serial.print(", "); Serial.print(dest_ys); Serial.print(", ");
+          //Serial.print(_pw_w); Serial.print(", "); Serial.print(dest_ye - dest_ys); Serial.print(") skipped ");
+          //Serial.print(dest_ys); Serial.print(".."); Serial.println(dest_ye);
+        }
+        _current_page++;
+        if (_current_page == int16_t(_pages))
+        {
+          _current_page = 0;
+          epd2.refresh(_pw_x, _pw_y, _pw_w, _pw_h);
+        }
+
+        fillScreen(GxEPD_WHITE);
+        return false;
+      }
+      else // full update
+      {
+        epd2.writeImage_4G(_buffer, 2, 0, page_ys, WIDTH, gx_uint16_min(_page_height, HEIGHT - page_ys));
+        _current_page++;
+        if (_current_page == int16_t(_pages))
+        {
+          _current_page = 0;
+          if ((epd2.panel == GxEPD2_4G::GDEW0154Z04) && (_pages > 1))
+          {
+            if (!_second_phase)
+            {
+              epd2.refresh(false); // full update after first phase
+              _second_phase = true;
+              fillScreen(GxEPD_WHITE);
+              return true;
+            }
+            else epd2.refresh(true); // partial update after second phase
+          } else epd2.refresh(false); // full update after only phase
+          epd2.powerOff();
+          return false;
+        }
+        fillScreen(GxEPD_WHITE);
+        return true;
+      }
+    }
+
     // GxEPD style paged drawing; drawCallback() is called as many times as needed
     void drawPaged(void (*drawCallback)(const void*), const void* pv)
     {
@@ -456,6 +515,41 @@ class GxEPD2_4G_BW_R : public GxEPD2_4G_GFX_BASE_CLASS
       }
     }
 
+    void drawGreyPixel(int16_t x, int16_t y, uint8_t grey)
+    {
+      if ((x < 0) || (x >= width()) || (y < 0) || (y >= height())) return;
+      if (_mirror) x = width() - x - 1;
+      // check rotation, move pixel around if necessary
+      switch (getRotation())
+      {
+        case 1:
+          _swap_(x, y);
+          x = WIDTH - x - 1;
+          break;
+        case 2:
+          x = WIDTH - x - 1;
+          y = HEIGHT - y - 1;
+          break;
+        case 3:
+          _swap_(x, y);
+          y = HEIGHT - y - 1;
+          break;
+      }
+      // transpose partial window to 0,0
+      x -= _pw_x;
+      y -= _pw_y;
+      // clip to (partial) window
+      if ((x < 0) || (x >= _pw_w) || (y < 0) || (y >= _pw_h)) return;
+      // adjust for current page
+      y -= _current_page * _page_height;
+      // check if in current page
+      if ((y < 0) || (y >= _page_height)) return;
+      uint16_t i = x / 4 + y * (_pw_w / 4);
+      _buffer[i] = (_buffer[i] & (0xFF ^ (3 << 2 * (3 - x % 4))));
+      _buffer[i] = (_buffer[i] | ((grey >> 6) << 2 * (3 - x % 4)));
+    }
+
+  
     void drawGreyPixmap(const uint8_t pixmap[], int16_t depth, int16_t x, int16_t y, int16_t w, int16_t h)
     {
       switch (depth)
@@ -500,8 +594,7 @@ class GxEPD2_4G_BW_R : public GxEPD2_4G_GFX_BASE_CLASS
                   byte = pixmap[j * byteWidth + i / 4];
 #endif
                 }
-                uint16_t color = byte & 0x80 ? 0xFFFF : 0x0000;
-                drawPixel(x + i, y + j, color);
+                drawGreyPixel(x + i, y + j, byte & 0xC0);
               }
             }
           }
@@ -523,8 +616,10 @@ class GxEPD2_4G_BW_R : public GxEPD2_4G_GFX_BASE_CLASS
                   byte = pixmap[j * byteWidth + i / 2];
 #endif
                 }
-                uint16_t color = byte & 0x80 ? 0xFFFF : 0x0000;
-                drawPixel(x + i, y + j, color);
+                uint8_t grey = byte & 0xF0;
+                if ((grey < 0xF0) && (grey >= 0xA0)) grey = 0x80; // light grey demo limit for 4bpp
+                else if ((grey < 0xF0) && (grey > 0x00)) grey = 0x40;  // dark grey
+                drawGreyPixel(x + i, y + j, grey);
               }
             }
           }
@@ -541,8 +636,7 @@ class GxEPD2_4G_BW_R : public GxEPD2_4G_GFX_BASE_CLASS
 #else
                 byte = pixmap[j * w + i];
 #endif
-                uint16_t color = byte & 0x80 ? 0xFFFF : 0x0000;
-                drawPixel(x + i, y + j, color);
+                drawGreyPixel(x + i, y + j, byte);
               }
             }
           }
@@ -699,7 +793,7 @@ class GxEPD2_4G_BW_R : public GxEPD2_4G_GFX_BASE_CLASS
       }
     }
   private:
-    uint8_t _buffer[(GxEPD2_Type::WIDTH / 8) * page_height];
+    uint8_t _buffer[(GxEPD2_Type::WIDTH / 4) * page_height];
     bool _using_partial_mode, _second_phase, _mirror, _reverse;
     uint16_t _width_bytes, _pixel_bytes;
     int16_t _current_page;
